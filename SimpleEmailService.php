@@ -18,6 +18,13 @@ class SimpleEmailService {
     protected $host;
 
     /**
+     * AWS SES limits
+     */
+    const MAX_SUBJECT_LENGTH = 998;
+    const MAX_RECIPIENTS_PER_MESSAGE = 50;
+    const MAX_MESSAGE_SIZE = 10485760; // 10 MB
+
+    /**
      * Constructor
      *
      * @param string $accessKey AWS Access Key
@@ -41,12 +48,61 @@ class SimpleEmailService {
      * @return array|false Response array or false on error
      */
     public function sendEmail($from, $to, $subject, $messageText, $messageHtml = null) {
+        // Validate sender email
+        if (!$this->validateEmail($from)) {
+            trigger_error('SimpleEmailService: Invalid sender email address: ' . $from, E_USER_WARNING);
+            return false;
+        }
+
+        // Validate and prepare recipients
+        $recipients = is_array($to) ? $to : array($to);
+
+        if (empty($recipients)) {
+            trigger_error('SimpleEmailService: At least one recipient is required', E_USER_WARNING);
+            return false;
+        }
+
+        if (count($recipients) > self::MAX_RECIPIENTS_PER_MESSAGE) {
+            trigger_error('SimpleEmailService: Maximum ' . self::MAX_RECIPIENTS_PER_MESSAGE . ' recipients allowed per message', E_USER_WARNING);
+            return false;
+        }
+
+        foreach ($recipients as $recipient) {
+            if (!$this->validateEmail($recipient)) {
+                trigger_error('SimpleEmailService: Invalid recipient email address: ' . $recipient, E_USER_WARNING);
+                return false;
+            }
+        }
+
+        // Validate subject
+        if (empty($subject) || trim($subject) === '') {
+            trigger_error('SimpleEmailService: Email subject is required', E_USER_WARNING);
+            return false;
+        }
+
+        if (strlen($subject) > self::MAX_SUBJECT_LENGTH) {
+            trigger_error('SimpleEmailService: Subject exceeds maximum length of ' . self::MAX_SUBJECT_LENGTH . ' characters', E_USER_WARNING);
+            return false;
+        }
+
+        // Validate message body
+        if ((empty($messageText) || trim($messageText) === '') && (empty($messageHtml) || trim($messageHtml) === '')) {
+            trigger_error('SimpleEmailService: At least one message body (text or HTML) is required', E_USER_WARNING);
+            return false;
+        }
+
+        // Check total message size
+        $totalSize = strlen($subject) + strlen((string)$messageText) + strlen((string)$messageHtml);
+        if ($totalSize > self::MAX_MESSAGE_SIZE) {
+            trigger_error('SimpleEmailService: Message size exceeds maximum limit of ' . self::MAX_MESSAGE_SIZE . ' bytes', E_USER_WARNING);
+            return false;
+        }
+
         $params = array();
         $params['Action'] = 'SendEmail';
         $params['Source'] = $from;
 
         // Add recipients
-        $recipients = is_array($to) ? $to : array($to);
         $i = 1;
         foreach ($recipients as $recipient) {
             $params['Destination.ToAddresses.member.' . $i] = $recipient;
@@ -58,12 +114,12 @@ class SimpleEmailService {
         $params['Message.Subject.Charset'] = 'UTF-8';
 
         // Add message body
-        if ($messageText) {
+        if ($messageText && trim($messageText) !== '') {
             $params['Message.Body.Text.Data'] = $messageText;
             $params['Message.Body.Text.Charset'] = 'UTF-8';
         }
 
-        if ($messageHtml) {
+        if ($messageHtml && trim($messageHtml) !== '') {
             $params['Message.Body.Html.Data'] = $messageHtml;
             $params['Message.Body.Html.Charset'] = 'UTF-8';
         }
@@ -84,6 +140,11 @@ class SimpleEmailService {
      * @return array|false Response array or false on error
      */
     public function verifyEmailAddress($email) {
+        if (!$this->validateEmail($email)) {
+            trigger_error('SimpleEmailService: Invalid email address: ' . $email, E_USER_WARNING);
+            return false;
+        }
+
         $params = array();
         $params['Action'] = 'VerifyEmailAddress';
         $params['EmailAddress'] = $email;
@@ -284,5 +345,61 @@ class SimpleEmailService {
         $kSigning = hash_hmac('sha256', 'aws4_request', $kService, true);
 
         return $kSigning;
+    }
+
+    /**
+     * Validate email address format
+     *
+     * @param string $email Email address to validate
+     * @return bool True if valid, false otherwise
+     */
+    protected function validateEmail($email) {
+        if (empty($email) || !is_string($email)) {
+            return false;
+        }
+
+        // Trim whitespace
+        $email = trim($email);
+
+        // Check for empty after trim
+        if ($email === '') {
+            return false;
+        }
+
+        // Use filter_var for RFC 5322 validation (available in PHP 5.2+)
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            return false;
+        }
+
+        // Additional checks for common issues
+        // Check length (email addresses should not exceed 254 characters per RFC 5321)
+        if (strlen($email) > 254) {
+            return false;
+        }
+
+        // Check for valid domain part
+        $parts = explode('@', $email);
+        if (count($parts) !== 2) {
+            return false;
+        }
+
+        list($local, $domain) = $parts;
+
+        // Local part should not be empty or too long (max 64 characters)
+        if (empty($local) || strlen($local) > 64) {
+            return false;
+        }
+
+        // Domain should not be empty
+        if (empty($domain)) {
+            return false;
+        }
+
+        // Domain should contain at least one dot
+        if (strpos($domain, '.') === false) {
+            return false;
+        }
+
+        return true;
     }
 }
