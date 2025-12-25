@@ -141,20 +141,44 @@ class SimpleEmailService {
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 
         if (curl_errno($ch)) {
+            $error = curl_error($ch);
             curl_close($ch);
+            trigger_error('SimpleEmailService: CURL Error - ' . $error, E_USER_WARNING);
             return false;
         }
 
         curl_close($ch);
 
-        if ($httpCode == 200) {
-            $xml = simplexml_load_string($response);
-            if ($xml) {
-                return $this->parseXmlResponse($xml);
-            }
+        // Parse XML response
+        $xml = simplexml_load_string($response);
+        if (!$xml) {
+            trigger_error('SimpleEmailService: Failed to parse XML response', E_USER_WARNING);
+            return false;
         }
 
-        return false;
+        // Check for HTTP error codes
+        if ($httpCode !== 200) {
+            $errorMessage = 'Unexpected HTTP status code: ' . $httpCode;
+
+            // Try to extract error details from AWS response
+            if (isset($xml->Error)) {
+                $errorType = isset($xml->Error->Type) ? (string)$xml->Error->Type : 'Unknown';
+                $errorCode = isset($xml->Error->Code) ? (string)$xml->Error->Code : 'Unknown';
+                $errorMsg = isset($xml->Error->Message) ? (string)$xml->Error->Message : 'Unknown error';
+                $errorMessage = sprintf(
+                    'AWS SES Error [HTTP %d] %s - %s: %s',
+                    $httpCode,
+                    $errorType,
+                    $errorCode,
+                    $errorMsg
+                );
+            }
+
+            trigger_error('SimpleEmailService: ' . $errorMessage, E_USER_WARNING);
+            return false;
+        }
+
+        return $this->parseXmlResponse($xml);
     }
 
     /**
